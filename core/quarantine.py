@@ -18,6 +18,7 @@ _AU_HOSTING_CACHES = [
 ]
 _REAPER_VST_INI    = Path.home() / "Library/Application Support/REAPER/reaper-vstplugins_arm64.ini"
 _REAPER_AU_INI     = Path.home() / "Library/Application Support/REAPER/reaper-auplugins_arm64.ini"
+_REAPER_AU_BC_INI  = Path.home() / "Library/Application Support/REAPER/reaper-auplugins_arm64-bc.ini"
 _WL_REGISTRY       = Path.home() / "Library/Preferences/WaveLab Pro 13/Cache/plugin-registry-arm.txt"
 MANIFEST_FILE  = QUARANTINE_DIR / "manifest.json"
 
@@ -133,6 +134,18 @@ def _remove_ini_lines(path: Path, keys: set[str]) -> None:
         path.write_text("".join(kept), encoding="utf-8")
 
 
+def _remove_bc_ini_lines(path: Path, keys: set[str]) -> None:
+    """Remove lines from Reaper's -bc.ini FX browser cache.
+    Format: AU "Vendor: Name" "Vendor: Name" timestamp ...
+    """
+    if not path.exists() or not keys:
+        return
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    kept = [l for l in lines if not any(l.startswith(f'AU "{k}"') for k in keys)]
+    if len(kept) < len(lines):
+        path.write_text("".join(kept), encoding="utf-8")
+
+
 def _remove_wavelab_blocks(bundle_paths: set[str]) -> None:
     """Remove plugin blocks from WaveLab's registry for the given bundle paths."""
     if not _WL_REGISTRY.exists() or not bundle_paths:
@@ -171,6 +184,7 @@ def _do_clear_caches(has_au: bool, au_cache_keys: set[str],
                 except FileNotFoundError:
                     pass
         _remove_ini_lines(_REAPER_AU_INI, au_cache_keys)
+        _remove_bc_ini_lines(_REAPER_AU_BC_INI, au_cache_keys)
 
     if vst_bundle_keys:
         _remove_ini_lines(_REAPER_VST_INI, vst_bundle_keys)
