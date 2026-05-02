@@ -156,12 +156,10 @@ def _remove_wavelab_blocks(bundle_paths: set[str]) -> None:
         _WL_REGISTRY.write_text("\n".join(result) + "\n", encoding="utf-8")
 
 
-def clear_daw_caches(records: list[PluginRecord]) -> None:
-    """Remove quarantined plugins from DAW plugin caches so they vanish on next DAW launch."""
-    au_records  = [r for r in records if r.format == PluginFormat.AU]
-    vst_records = [r for r in records if r.format in (PluginFormat.VST3, PluginFormat.VST2)]
-
-    if au_records:
+def _do_clear_caches(has_au: bool, au_cache_keys: set[str],
+                     vst_bundle_keys: set[str], vst_orig_paths: set[str]) -> None:
+    """Shared cache-clearing logic used by both clear_daw_caches variants."""
+    if has_au:
         try:
             _AU_CACHE_PLIST.unlink()
         except FileNotFoundError:
@@ -172,11 +170,35 @@ def clear_daw_caches(records: list[PluginRecord]) -> None:
                     (cache_dir / name).unlink()
                 except FileNotFoundError:
                     pass
-        _remove_ini_lines(_REAPER_AU_INI, {r.au_cache_key for r in au_records if r.au_cache_key})
+        _remove_ini_lines(_REAPER_AU_INI, au_cache_keys)
 
-    if vst_records:
-        _remove_ini_lines(_REAPER_VST_INI, {r.bundle_name.replace(" ", "_") for r in vst_records})
-        _remove_wavelab_blocks({str(r.bundle_path) for r in vst_records})
+    if vst_bundle_keys:
+        _remove_ini_lines(_REAPER_VST_INI, vst_bundle_keys)
+        _remove_wavelab_blocks(vst_orig_paths)
+
+
+def clear_daw_caches(records: list[PluginRecord]) -> None:
+    """Remove newly quarantined plugins from DAW caches."""
+    au_records  = [r for r in records if r.format == PluginFormat.AU]
+    vst_records = [r for r in records if r.format in (PluginFormat.VST3, PluginFormat.VST2)]
+    _do_clear_caches(
+        has_au        = bool(au_records),
+        au_cache_keys = {r.au_cache_key for r in au_records if r.au_cache_key},
+        vst_bundle_keys = {r.bundle_name.replace(" ", "_") for r in vst_records},
+        vst_orig_paths  = {str(r.bundle_path) for r in vst_records},
+    )
+
+
+def clear_daw_caches_for_entries(entries: list[QuarantineEntry]) -> None:
+    """Clear DAW caches for already-quarantined entries (reads from manifest)."""
+    au_entries  = [e for e in entries if e.format == "AU"]
+    vst_entries = [e for e in entries if e.format in ("VST3", "VST2")]
+    _do_clear_caches(
+        has_au          = bool(au_entries),
+        au_cache_keys   = {f"{e.vendor}: {e.display_name}" for e in au_entries if e.vendor},
+        vst_bundle_keys = {e.bundle_name.replace(" ", "_") for e in vst_entries},
+        vst_orig_paths  = {e.original_path for e in vst_entries},
+    )
 
 
 def restore_plugin(entry: QuarantineEntry) -> None:

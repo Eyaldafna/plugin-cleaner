@@ -100,6 +100,14 @@ class QuarantinePanel(QWidget):
         bar_layout.addWidget(self._info_label)
         bar_layout.addStretch()
 
+        self._clean_btn = QPushButton("Clean DAW Caches")
+        self._clean_btn.setToolTip(
+            "Remove all quarantined plugins from Reaper and Logic caches.\n"
+            "Restart your DAWs after clicking."
+        )
+        self._clean_btn.clicked.connect(self._on_clean_caches)
+        bar_layout.addWidget(self._clean_btn)
+
         self._restore_btn = QPushButton("↩ Restore")
         self._restore_btn.setEnabled(False)
         self._restore_btn.clicked.connect(self._on_restore)
@@ -130,6 +138,26 @@ class QuarantinePanel(QWidget):
             return None
         src = self._view.model().mapToSource(idxs[0]) if hasattr(self._view.model(), "mapToSource") else idxs[0]
         return self._model.data(src, Qt.ItemDataRole.UserRole)
+
+    def _on_clean_caches(self):
+        entries = qm.load_quarantine_entries()
+        if not entries:
+            QMessageBox.information(self, "Nothing to Clean", "No quarantined plugins found.")
+            return
+        qm.clear_daw_caches_for_entries(entries)
+        running = qm.daws_running()
+        if running:
+            daw_str = " and ".join(running)
+            QMessageBox.information(
+                self, "Restart Required",
+                f"Caches cleaned for {len(entries)} quarantined plugin{'s' if len(entries) != 1 else ''}.\n\n"
+                f"Quit and reopen {daw_str} to remove them from the plugin browser.",
+            )
+        else:
+            QMessageBox.information(
+                self, "Caches Cleaned",
+                f"Caches cleaned for {len(entries)} quarantined plugin{'s' if len(entries) != 1 else ''}.",
+            )
 
     def _on_selection_changed(self):
         has = bool(self._view.selectionModel().selectedRows())
