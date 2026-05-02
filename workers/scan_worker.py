@@ -1,9 +1,11 @@
 from __future__ import annotations
+from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from core.scanner import scan_all
 from core.session_parser import (
     parse_logic_sessions, parse_reaper_sessions, parse_wavelab_usage,
+    SESSIONS_ROOT,
 )
 from core.resolver import resolve
 from core.models import PluginRecord
@@ -13,6 +15,10 @@ class ScanWorker(QThread):
     progress  = Signal(int, int, str)   # current, total, message
     finished  = Signal(list)            # list[PluginRecord]
     error     = Signal(str)
+
+    def __init__(self, sessions_root: Path | None = None, parent=None):
+        super().__init__(parent)
+        self._sessions_root = sessions_root or SESSIONS_ROOT
 
     def run(self):
         try:
@@ -31,7 +37,7 @@ class ScanWorker(QThread):
                 pct = 10 + int(40 * i / max(total, 1))
                 self.progress.emit(pct, 100, msg)
 
-            reaper_refs = parse_reaper_sessions(progress_cb=reaper_cb)
+            reaper_refs = parse_reaper_sessions(root=self._sessions_root, progress_cb=reaper_cb)
             self.progress.emit(50, 100, f"Reaper done ({len(reaper_refs)} refs). Scanning Logic…")
 
             # Phase 3: Logic sessions
@@ -39,7 +45,7 @@ class ScanWorker(QThread):
                 pct = 50 + int(35 * i / max(total, 1))
                 self.progress.emit(pct, 100, msg)
 
-            logic_refs = parse_logic_sessions(progress_cb=logic_cb)
+            logic_refs = parse_logic_sessions(root=self._sessions_root, progress_cb=logic_cb)
             self.progress.emit(85, 100, f"Logic done ({len(logic_refs)} refs). Scanning WaveLab…")
 
             # Phase 4: WaveLab

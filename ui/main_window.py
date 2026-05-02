@@ -1,12 +1,14 @@
 from __future__ import annotations
+from pathlib import Path
 from PySide6.QtCore import Qt, QItemSelectionModel
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
+    QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
     QProgressBar, QSplitter, QStatusBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from core.models import PluginRecord, UsageStatus
 import core.quarantine as qm
+from core.session_parser import SESSIONS_ROOT
 from ui.detail_panel import DetailPanel
 from ui.filter_bar import FilterBar
 from ui.plugin_table import make_plugin_table
@@ -25,6 +27,7 @@ class MainWindow(QMainWindow):
         self._records: list[PluginRecord] = []
         self._scan_worker: ScanWorker | None = None
         self._q_worker: QuarantineWorker | None = None
+        self._sessions_root: Path = SESSIONS_ROOT
 
         self._build_ui()
         self._start_scan()
@@ -79,6 +82,14 @@ class MainWindow(QMainWindow):
         ab_layout = QHBoxLayout(action_bar)
         ab_layout.setContentsMargins(10, 8, 10, 8)
 
+        self._sessions_btn = QPushButton()
+        self._sessions_btn.setStyleSheet("color: #888; font-size: 11px; text-align: left; border: none; padding: 0;")
+        self._sessions_btn.clicked.connect(self._browse_sessions)
+        self._update_sessions_btn()
+        ab_layout.addWidget(self._sessions_btn)
+
+        ab_layout.addStretch()
+
         self._sel_label = QLabel("No plugins selected")
         self._sel_label.setStyleSheet("color: #888; font-size: 12px;")
         ab_layout.addWidget(self._sel_label)
@@ -108,6 +119,26 @@ class MainWindow(QMainWindow):
         self._stats_panel = StatsPanel()
         self._tabs.addTab(self._stats_panel, "Statistics")
 
+    # ------------------------------------------------------------------ Sessions folder
+
+    def _update_sessions_btn(self):
+        home = Path.home()
+        try:
+            label = "~/" + str(self._sessions_root.relative_to(home))
+        except ValueError:
+            label = str(self._sessions_root)
+        self._sessions_btn.setText(f"Sessions: {label}  ▾")
+
+    def _browse_sessions(self):
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Select Sessions Folder", str(self._sessions_root),
+        )
+        if not chosen:
+            return
+        self._sessions_root = Path(chosen)
+        self._update_sessions_btn()
+        self._start_scan()
+
     # ------------------------------------------------------------------ Scanning
 
     def _start_scan(self):
@@ -117,7 +148,7 @@ class MainWindow(QMainWindow):
         self._quarantine_btn.setEnabled(False)
         self._select_unused_btn.setEnabled(False)
 
-        self._scan_worker = ScanWorker()
+        self._scan_worker = ScanWorker(sessions_root=self._sessions_root)
         self._scan_worker.progress.connect(self._on_scan_progress)
         self._scan_worker.finished.connect(self._on_scan_done)
         self._scan_worker.error.connect(self._on_scan_error)
