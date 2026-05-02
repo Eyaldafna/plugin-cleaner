@@ -1,14 +1,20 @@
 from __future__ import annotations
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from .models import PluginRecord, QuarantineEntry
+from .models import PluginFormat, PluginRecord, QuarantineEntry
 
 QUARANTINE_DIR = Path.home() / "PluginQuarantine"
+
+_AU_CACHE_PLIST  = Path.home() / "Library/Preferences/com.apple.audio.AudioComponentCache.plist"
+_REAPER_VST_INI  = Path.home() / "Library/Application Support/REAPER/reaper-vstplugins_arm64.ini"
+_REAPER_AU_INI   = Path.home() / "Library/Application Support/REAPER/reaper-auplugins_arm64.ini"
+_WL_REGISTRY     = Path.home() / "Library/Preferences/WaveLab Pro 13/Cache/plugin-registry-arm.txt"
 MANIFEST_FILE  = QUARANTINE_DIR / "manifest.json"
 
 
@@ -46,38 +52,121 @@ def daws_running() -> list[str]:
     return running
 
 
-def quarantine_plugin(record: PluginRecord) -> QuarantineEntry:
-    """Move plugin bundle to quarantine folder. Returns the QuarantineEntry."""
+def _prepare_dest(record: PluginRecord) -> Path:
     dest_dir = QUARANTINE_DIR / record.format.value
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / record.bundle_name
-
-    # If a file with that name already exists in quarantine, suffix it
     if dest.exists():
-        stem = record.bundle_path.stem
-        suffix = record.bundle_path.suffix
-        dest = dest_dir / f"{stem}_dup{suffix}"
+        dest = dest_dir / f"{record.bundle_path.stem}_dup{record.bundle_path.suffix}"
+    return dest
 
-    os.rename(str(record.bundle_path), str(dest))
 
-    entry = QuarantineEntry(
-        bundle_name     = record.bundle_name,
-        format          = record.format.value,
-        original_path   = str(record.bundle_path),
-        quarantine_path = str(dest),
-        quarantined_at  = datetime.now().isoformat(timespec="seconds"),
-        display_name    = record.display_name,
-        vendor          = record.vendor,
-        version         = record.version,
-        was_status      = record.status.value,
-        size_bytes      = record.size_bytes,
+def _make_entry(record: PluginRecord, dest: Path) -> QuarantineEntry:
+    return QuarantineEntry(
+        bundle_name=record.bundle_name,
+        format=record.format.value,
+        original_path=str(record.bundle_path),
+        quarantine_path=str(dest),
+        quarantined_at=datetime.now().isoformat(timespec="seconds"),
+        display_name=record.display_name,
+        vendor=record.vendor,
+        version=record.version,
+        was_status=record.status.value,
+        size_bytes=record.size_bytes,
     )
 
+
+def quarantine_plugin(record: PluginRecord) -> QuarantineEntry:
+    """Move plugin bundle to quarantine folder. Raises PermissionError if root-owned."""
+    dest = _prepare_dest(record)
+    os.rename(str(record.bundle_path), str(dest))
+    entry = _make_entry(record, dest)
     entries = _load_manifest()
     entries.append(entry.__dict__)
     _save_manifest(entries)
     record.is_quarantined = True
     return entry
+
+
+def quarantine_plugins_privileged(records: list[PluginRecord]) -> list[QuarantineEntry]:
+    """Move root-owned plugins via a single osascript admin-auth dialog."""
+    moves: list[tuple[str, str]] = []
+    pairs: list[tuple[PluginRecord, Path]] = []
+    for rec in records:
+        dest = _prepare_dest(rec)
+        moves.append((str(rec.bundle_path), str(dest)))
+        pairs.append((rec, dest))
+
+    mv_cmd = " && ".join(
+        f"mv -f {shlex.quote(src)} {shlex.quote(dst)}" for src, dst in moves
+    )
+    result = subprocess.run(
+        ["osascript", "-e", f'do shell script "{mv_cmd}" with administrator privileges'],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        err = result.stderr.strip() or "Administrator authentication failed or was cancelled."
+        raise PermissionError(err)
+
+    new_entries: list[QuarantineEntry] = []
+    existing = _load_manifest()
+    for rec, dest in pairs:
+        entry = _make_entry(rec, dest)
+        existing.append(entry.__dict__)
+        rec.is_quarantined = True
+        new_entries.append(entry)
+    _save_manifest(existing)
+    return new_entries
+
+
+def _remove_ini_lines(path: Path, keys: set[str]) -> None:
+    """Remove lines whose key (text before '=') is in keys."""
+    if not path.exists() or not keys:
+        return
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    kept = [l for l in lines if not any(l.startswith(k + "=") for k in keys)]
+    if len(kept) < len(lines):
+        path.write_text("".join(kept), encoding="utf-8")
+
+
+def _remove_wavelab_blocks(bundle_paths: set[str]) -> None:
+    """Remove plugin blocks from WaveLab's registry for the given bundle paths."""
+    if not _WL_REGISTRY.exists() or not bundle_paths:
+        return
+    lines = _WL_REGISTRY.read_text(encoding="utf-8", errors="replace").splitlines()
+    result: list[str] = []
+    skip_depth = 0
+    for line in lines:
+        s = line.strip()
+        if skip_depth == 0 and s in bundle_paths:
+            skip_depth = 1
+            continue
+        if skip_depth > 0:
+            if s == "{":
+                skip_depth += 1
+            elif s == "}":
+                skip_depth -= 1
+            continue
+        result.append(line)
+    if len(result) < len(lines):
+        _WL_REGISTRY.write_text("\n".join(result) + "\n", encoding="utf-8")
+
+
+def clear_daw_caches(records: list[PluginRecord]) -> None:
+    """Remove quarantined plugins from DAW plugin caches so they vanish on next DAW launch."""
+    au_records  = [r for r in records if r.format == PluginFormat.AU]
+    vst_records = [r for r in records if r.format in (PluginFormat.VST3, PluginFormat.VST2)]
+
+    if au_records:
+        try:
+            _AU_CACHE_PLIST.unlink()
+        except FileNotFoundError:
+            pass
+        _remove_ini_lines(_REAPER_AU_INI, {r.au_cache_key for r in au_records if r.au_cache_key})
+
+    if vst_records:
+        _remove_ini_lines(_REAPER_VST_INI, {r.bundle_name.replace(" ", "_") for r in vst_records})
+        _remove_wavelab_blocks({str(r.bundle_path) for r in vst_records})
 
 
 def restore_plugin(entry: QuarantineEntry) -> None:
