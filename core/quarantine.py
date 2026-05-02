@@ -124,28 +124,6 @@ def quarantine_plugins_privileged(records: list[PluginRecord]) -> list[Quarantin
     return new_entries
 
 
-def _remove_ini_lines(path: Path, keys: set[str]) -> None:
-    """Remove lines whose key (text before '=') is in keys."""
-    if not path.exists() or not keys:
-        return
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-    kept = [l for l in lines if not any(l.startswith(k + "=") for k in keys)]
-    if len(kept) < len(lines):
-        path.write_text("".join(kept), encoding="utf-8")
-
-
-def _remove_bc_ini_lines(path: Path, keys: set[str]) -> None:
-    """Remove lines from Reaper's -bc.ini FX browser cache.
-    Format: AU "Vendor: Name" "Vendor: Name" timestamp ...
-    """
-    if not path.exists() or not keys:
-        return
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-    kept = [l for l in lines if not any(l.startswith(f'AU "{k}"') for k in keys)]
-    if len(kept) < len(lines):
-        path.write_text("".join(kept), encoding="utf-8")
-
-
 def _remove_wavelab_blocks(bundle_paths: set[str]) -> None:
     """Remove plugin blocks from WaveLab's registry for the given bundle paths."""
     if not _WL_REGISTRY.exists() or not bundle_paths:
@@ -169,25 +147,29 @@ def _remove_wavelab_blocks(bundle_paths: set[str]) -> None:
         _WL_REGISTRY.write_text("\n".join(result) + "\n", encoding="utf-8")
 
 
-def _do_clear_caches(has_au: bool, au_cache_keys: set[str],
+def _delete_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _do_clear_caches(has_au: bool,
                      vst_bundle_keys: set[str], vst_orig_paths: set[str]) -> None:
     """Shared cache-clearing logic used by both clear_daw_caches variants."""
     if has_au:
-        try:
-            _AU_CACHE_PLIST.unlink()
-        except FileNotFoundError:
-            pass
+        # macOS AU caches — deleted entirely so the OS rescans from filesystem on next DAW launch
+        _delete_file(_AU_CACHE_PLIST)
         for cache_dir in _AU_HOSTING_CACHES:
             for name in ("Cache.db", "Cache.db-shm", "Cache.db-wal"):
-                try:
-                    (cache_dir / name).unlink()
-                except FileNotFoundError:
-                    pass
-        _remove_ini_lines(_REAPER_AU_INI, au_cache_keys)
-        _remove_bc_ini_lines(_REAPER_AU_BC_INI, au_cache_keys)
+                _delete_file(cache_dir / name)
+        # Reaper AU caches — delete entirely so Reaper rescans on next launch
+        _delete_file(_REAPER_AU_INI)
+        _delete_file(_REAPER_AU_BC_INI)
 
     if vst_bundle_keys:
-        _remove_ini_lines(_REAPER_VST_INI, vst_bundle_keys)
+        # Reaper VST cache — delete entirely so Reaper rescans on next launch
+        _delete_file(_REAPER_VST_INI)
         _remove_wavelab_blocks(vst_orig_paths)
 
 
@@ -196,8 +178,7 @@ def clear_daw_caches(records: list[PluginRecord]) -> None:
     au_records  = [r for r in records if r.format == PluginFormat.AU]
     vst_records = [r for r in records if r.format in (PluginFormat.VST3, PluginFormat.VST2)]
     _do_clear_caches(
-        has_au        = bool(au_records),
-        au_cache_keys = {r.au_cache_key for r in au_records if r.au_cache_key},
+        has_au          = bool(au_records),
         vst_bundle_keys = {r.bundle_name.replace(" ", "_") for r in vst_records},
         vst_orig_paths  = {str(r.bundle_path) for r in vst_records},
     )
@@ -209,7 +190,6 @@ def clear_daw_caches_for_entries(entries: list[QuarantineEntry]) -> None:
     vst_entries = [e for e in entries if e.format in ("VST3", "VST2")]
     _do_clear_caches(
         has_au          = bool(au_entries),
-        au_cache_keys   = {f"{e.vendor}: {e.display_name}" for e in au_entries if e.vendor},
         vst_bundle_keys = {e.bundle_name.replace(" ", "_") for e in vst_entries},
         vst_orig_paths  = {e.original_path for e in vst_entries},
     )
