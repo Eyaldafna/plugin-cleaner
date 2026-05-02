@@ -290,13 +290,21 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(False)
         n = len(entries)
         self._status_label.setText(f"{n} plugin{'s' if n > 1 else ''} quarantined")
-        # Refresh table to reflect new quarantine state
         self._table_model.set_records(self._records)
         self._q_panel.refresh()
         self._update_quarantine_badge()
         self._update_stats()
         self._detail.clear()
         self._view.clearSelection()
+        if n:
+            running = qm.daws_running()
+            if running:
+                daw_str = " and ".join(running)
+                QMessageBox.information(
+                    self, "Restart Required",
+                    f"{n} plugin{'s' if n > 1 else ''} quarantined.\n\n"
+                    f"Quit and reopen {daw_str} to remove them from the plugin browser.",
+                )
 
     def _on_plugin_restored(self, original_path: str):
         self._update_quarantine_badge()

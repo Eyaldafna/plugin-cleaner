@@ -11,10 +11,14 @@ from .models import PluginFormat, PluginRecord, QuarantineEntry
 
 QUARANTINE_DIR = Path.home() / "PluginQuarantine"
 
-_AU_CACHE_PLIST  = Path.home() / "Library/Preferences/com.apple.audio.AudioComponentCache.plist"
-_REAPER_VST_INI  = Path.home() / "Library/Application Support/REAPER/reaper-vstplugins_arm64.ini"
-_REAPER_AU_INI   = Path.home() / "Library/Application Support/REAPER/reaper-auplugins_arm64.ini"
-_WL_REGISTRY     = Path.home() / "Library/Preferences/WaveLab Pro 13/Cache/plugin-registry-arm.txt"
+_AU_CACHE_PLIST    = Path.home() / "Library/Preferences/com.apple.audio.AudioComponentCache.plist"
+_AU_HOSTING_CACHES = [
+    Path.home() / "Library/Caches/com.apple.audio.AUHostingService.arm64e",
+    Path.home() / "Library/Caches/com.apple.audio.AUHostingService.x86-64",
+]
+_REAPER_VST_INI    = Path.home() / "Library/Application Support/REAPER/reaper-vstplugins_arm64.ini"
+_REAPER_AU_INI     = Path.home() / "Library/Application Support/REAPER/reaper-auplugins_arm64.ini"
+_WL_REGISTRY       = Path.home() / "Library/Preferences/WaveLab Pro 13/Cache/plugin-registry-arm.txt"
 MANIFEST_FILE  = QUARANTINE_DIR / "manifest.json"
 
 
@@ -162,6 +166,12 @@ def clear_daw_caches(records: list[PluginRecord]) -> None:
             _AU_CACHE_PLIST.unlink()
         except FileNotFoundError:
             pass
+        for cache_dir in _AU_HOSTING_CACHES:
+            for name in ("Cache.db", "Cache.db-shm", "Cache.db-wal"):
+                try:
+                    (cache_dir / name).unlink()
+                except FileNotFoundError:
+                    pass
         _remove_ini_lines(_REAPER_AU_INI, {r.au_cache_key for r in au_records if r.au_cache_key})
 
     if vst_records:
