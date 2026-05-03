@@ -3,7 +3,7 @@ from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtWidgets import (
-    QHBoxLayout, QHeaderView, QLabel, QMessageBox,
+    QHBoxLayout, QLabel, QMessageBox,
     QPushButton, QTableView, QVBoxLayout, QWidget,
 )
 from core.models import QuarantineEntry
@@ -22,10 +22,10 @@ class QuarantineModel(QAbstractTableModel):
         super().__init__(parent)
         self._entries = entries
 
-    def rowCount(self, parent=QModelIndex()) -> int:
+    def rowCount(self, _parent=QModelIndex()) -> int:
         return len(self._entries)
 
-    def columnCount(self, parent=QModelIndex()) -> int:
+    def columnCount(self, _parent=QModelIndex()) -> int:
         return len(Q_HEADERS)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
@@ -63,7 +63,6 @@ class QuarantineModel(QAbstractTableModel):
 
 
 class QuarantinePanel(QWidget):
-    # Emitted when an entry is restored so main window can refresh the plugin list
     restored = Signal(str)   # original_path
 
     def __init__(self, parent=None):
@@ -77,7 +76,7 @@ class QuarantinePanel(QWidget):
         self._view.setModel(self._model)
         self._view.setAlternatingRowColors(True)
         self._view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
-        self._view.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self._view.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self._view.setSortingEnabled(True)
         self._view.setShowGrid(False)
         self._view.verticalHeader().setVisible(False)
@@ -127,17 +126,23 @@ class QuarantinePanel(QWidget):
     def refresh(self) -> None:
         entries = qm.load_quarantine_entries()
         self._model.set_entries(entries)
-        n = len(entries)
-        self._info_label.setText(f"{n} plugin{'s' if n != 1 else ''} quarantined")
+        self._update_info_label()
         self._restore_btn.setEnabled(False)
         self._delete_btn.setEnabled(False)
 
-    def _selected_entry(self) -> QuarantineEntry | None:
+    def _update_info_label(self) -> None:
+        n = self._model.rowCount()
+        self._info_label.setText(f"{n} plugin{'s' if n != 1 else ''} quarantined")
+
+    def _selected_entries(self) -> list[QuarantineEntry]:
         idxs = self._view.selectionModel().selectedRows()
-        if not idxs:
-            return None
-        src = self._view.model().mapToSource(idxs[0]) if hasattr(self._view.model(), "mapToSource") else idxs[0]
-        return self._model.data(src, Qt.ItemDataRole.UserRole)
+        entries = []
+        for idx in idxs:
+            src = self._view.model().mapToSource(idx) if hasattr(self._view.model(), "mapToSource") else idx
+            e = self._model.data(src, Qt.ItemDataRole.UserRole)
+            if e:
+                entries.append(e)
+        return entries
 
     def _on_clean_caches(self):
         entries = qm.load_quarantine_entries()
@@ -165,40 +170,42 @@ class QuarantinePanel(QWidget):
         self._delete_btn.setEnabled(has)
 
     def _on_restore(self):
-        entry = self._selected_entry()
-        if not entry:
+        entries = self._selected_entries()
+        if not entries:
             return
+        n = len(entries)
+        msg = (f"Restore '{entries[0].display_name}' to its original location?\n\n{entries[0].original_path}"
+               if n == 1 else f"Restore {n} plugins to their original locations?")
         ans = QMessageBox.question(
-            self, "Restore Plugin",
-            f"Restore '{entry.display_name}' to its original location?\n\n{entry.original_path}",
+            self, "Restore Plugin", msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
         if ans != QMessageBox.StandardButton.Yes:
             return
-        try:
-            qm.restore_plugin(entry)
+        restored, errors = qm.restore_plugins(entries)
+        for entry in restored:
             self._model.remove_entry(entry)
             self.restored.emit(entry.original_path)
-            n = self._model.rowCount()
-            self._info_label.setText(f"{n} plugin{'s' if n != 1 else ''} quarantined")
-        except Exception as e:
-            QMessageBox.critical(self, "Restore Failed", str(e))
+        self._update_info_label()
+        if errors:
+            QMessageBox.critical(self, "Restore Failed", "\n".join(errors))
 
     def _on_delete(self):
-        entry = self._selected_entry()
-        if not entry:
+        entries = self._selected_entries()
+        if not entries:
             return
+        n = len(entries)
+        msg = (f"Permanently delete '{entries[0].display_name}'?\n\nThis cannot be undone."
+               if n == 1 else f"Permanently delete {n} plugins?\n\nThis cannot be undone.")
         ans = QMessageBox.question(
-            self, "Delete Permanently",
-            f"Permanently delete '{entry.display_name}'?\n\nThis cannot be undone.",
+            self, "Delete Permanently", msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
         if ans != QMessageBox.StandardButton.Yes:
             return
-        try:
-            qm.delete_permanently(entry)
+        deleted, errors = qm.delete_plugins_permanently(entries)
+        for entry in deleted:
             self._model.remove_entry(entry)
-            n = self._model.rowCount()
-            self._info_label.setText(f"{n} plugin{'s' if n != 1 else ''} quarantined")
-        except Exception as e:
-            QMessageBox.critical(self, "Delete Failed", str(e))
+        self._update_info_label()
+        if errors:
+            QMessageBox.critical(self, "Delete Failed", "\n".join(errors))

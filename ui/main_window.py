@@ -30,6 +30,9 @@ class MainWindow(QMainWindow):
         self._sessions_root: Path = SESSIONS_ROOT
 
         self._build_ui()
+        qm.migrate_quarantine_dir()
+        self._q_panel.refresh()
+        self._update_quarantine_badge()
         self._start_scan()
 
     # ------------------------------------------------------------------ Build UI
@@ -265,7 +268,7 @@ class MainWindow(QMainWindow):
         ans = QMessageBox.question(
             self, "Quarantine Plugins",
             f"Move {len(records_to_q)} plugin{'s' if len(records_to_q) > 1 else ''} "
-            f"({total_mb:.0f} MB) to ~/PluginQuarantine?\n\n"
+            f"({total_mb:.0f} MB) to /Library/Audio/Plug-Ins/Quarantine?\n\n"
             "They will be invisible to your DAWs until restored or permanently deleted.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
